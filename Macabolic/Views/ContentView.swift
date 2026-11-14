@@ -202,6 +202,7 @@ struct DetailView: View {
 }
 
 struct HomeView: View {
+    @EnvironmentObject var ytdlpService: YtdlpService
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var downloadManager: DownloadManager
     @EnvironmentObject var languageService: LanguageService
@@ -274,7 +275,7 @@ struct HomeView: View {
                     Spacer(minLength: 40)
                     
                     // Version info footer
-                    if let version = downloadManager.ytdlpVersion {
+                    if let version = ytdlpService.version {
                         HStack(spacing: 6) {
                             Image(systemName: "terminal.fill")
                                 .font(.system(size: 10))
@@ -522,9 +523,12 @@ struct SpecialThanksView: View {
             }
             .font(.system(size: 9, weight: .bold))
             
-            Text(languageService.s("for_support"))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(.secondary)
+            let thanksSuffix = languageService.s("for_support")
+            if !thanksSuffix.isEmpty {
+                Text(thanksSuffix)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
         }
         .padding(.bottom, 4)
     }

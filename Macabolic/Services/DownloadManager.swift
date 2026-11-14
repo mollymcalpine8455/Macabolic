@@ -8,7 +8,6 @@ class DownloadManager: ObservableObject {
     @Published var downloads: [Download] = []
     @Published var history: [HistoricDownload] = []
     @Published var showDisclaimer: Bool = false
-    @Published var ytdlpVersion: String?
     @Published var showWhatsNew: Bool = false
     
 
@@ -49,9 +48,6 @@ class DownloadManager: ObservableObject {
         self.languageService = languageService
 
         await ytdlpService.setupBinaries()
-        // Wait a bit for version to be populated if needed, or better, fetch it explicitly
-        await ytdlpService.getVersion()
-        ytdlpVersion = ytdlpService.version
         
 
         loadHistory()
@@ -61,7 +57,7 @@ class DownloadManager: ObservableObject {
             showDisclaimer = true
         }
 
-        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1.0"
+        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1.1"
         let lastSeenVersion = userDefaults.string(forKey: "lastSeenVersion_v3") ?? "0.0.0"
         
         if currentVersion != lastSeenVersion {
@@ -160,18 +156,19 @@ class DownloadManager: ObservableObject {
 
     
     private func processDownload(_ download: Download) async {
-
-        while downloadingCount >= maxConcurrentDownloads {
+        while download.status == .queued && downloadingCount >= maxConcurrentDownloads {
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
-        
+        guard download.status == .queued else { return }
+
         download.status = .fetching
         objectWillChange.send()
         
+        defer { activeProcesses.removeValue(forKey: download.id) }
         do {
-
             let info = try await ytdlpService.fetchInfo(url: download.url)
-            
+            guard download.status == .fetching else { return }
+
             download.title = info.title
             download.duration = info.durationString
             download.thumbnailURL = info.thumbnailURL
@@ -182,15 +179,8 @@ class DownloadManager: ObservableObject {
             let outputPath = try await ytdlpService.download(
                 url: download.url,
                 options: download.options,
-                onProcessCreated: { [weak self] process in
-                    Task { @MainActor in
-                        guard let self = self else { return }
-                        // If the download finished before this Task ran, don't add it
-                        if let d = self.downloads.first(where: { $0.id == download.id }),
-                           d.status == .downloading || d.status == .fetching || d.status == .processing {
-                            self.activeProcesses[download.id] = process
-                        }
-                    }
+                onProcessCreated: { process in
+                    self.activeProcesses[download.id] = process
                 },
                 onProgress: { progress, speed, eta in
                     download.progress = progress
@@ -217,43 +207,21 @@ class DownloadManager: ObservableObject {
                 NotificationService.shared.sendDownloadCompleted(filename: download.title.isEmpty ? download.url : download.title, languageService: lang)
             }
             
-        } catch let error as YtdlpError {
-            download.status = .failed
-            objectWillChange.send()
-            if let lang = languageService {
-                switch error {
-                case .tooManyRequests:
-                    download.errorMessage = lang.s("too_many_requests")
-                case .subtitleError(let details):
-                    download.errorMessage = String(format: lang.s("subtitle_download_failed"), details)
-                case .downloadFailed(let reason):
-                    download.errorMessage = String(format: lang.s("download_failed_error"), reason)
-                default:
-                    download.errorMessage = error.localizedDescription
-                }
-                
-                // Send notification for failure
-                NotificationService.shared.sendDownloadFailed(filename: download.title.isEmpty ? download.url : download.title, languageService: lang)
-                
-            } else {
-                download.errorMessage = error.localizedDescription
-            }
-            addToHistory(download)
         } catch {
+            guard download.status != .stopped else { return }
             download.status = .failed
             objectWillChange.send()
-            download.errorMessage = error.localizedDescription
-            
+            download.errorMessage = languageService?.downloadErrorMessage(error) ?? error.localizedDescription
             if let lang = languageService {
-                NotificationService.shared.sendDownloadFailed(filename: download.title.isEmpty ? download.url : download.title, languageService: lang)
+                NotificationService.shared.sendDownloadFailed(
+                    filename: download.title.isEmpty ? download.url : download.title,
+                    languageService: lang
+                )
             }
-            
             addToHistory(download)
         }
     }
-    
 
-    
 
     func stopDownload(_ download: Download) {
         if let process = activeProcesses[download.id] {

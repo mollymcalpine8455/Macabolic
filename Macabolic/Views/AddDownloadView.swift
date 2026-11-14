@@ -89,7 +89,7 @@ struct AddDownloadView: View {
                         if !showPlaylistSelector {
                             mediaInfoSection(info)
                             
-                            if info.playlist != nil {
+                            if info.isPlaylist || URLComponents(string: urlInput)?.queryItems?.contains(where: { $0.name == "list" }) == true {
                                 playlistDetectedBanner
                             }
                         } else {
@@ -649,7 +649,7 @@ struct AddDownloadView: View {
                                                         if selectedSubtitleLangs.contains(sub.id) {
                                                             Image(systemName: "checkmark")
                                                         }
-                                                        Text("\(sub.name) [Auto]")
+                                                        Text(String(format: languageService.s("auto_subtitle_label"), sub.name))
                                                     }
                                                 }
                                             }
@@ -685,6 +685,7 @@ struct AddDownloadView: View {
             GroupBox(languageService.s("embedded_data")) {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(languageService.s("embed_thumbnail"), isOn: $embedThumbnail)
+                        .disabled(!fileType.supportsEmbeddedThumbnail)
                     Toggle(languageService.s("metadata_desc"), isOn: $embedMetadata)
                 }
                 .padding(.vertical, 4)
@@ -724,14 +725,18 @@ struct AddDownloadView: View {
             
             Button(downloadTitle) { startDownload() }
             .buttonStyle(.borderedProminent)
-            .disabled(mediaInfo == nil || (downloadMode == .playlist && selectedPlaylistIds.isEmpty))
+            .disabled(isLoading || mediaInfo == nil
+                || (downloadMode == .playlist && selectedPlaylistIds.isEmpty)
+                || (downloadMode == .single && mediaInfo?.isPlaylist == true))
             .keyboardShortcut(.return)
         }
         .padding()
     }
 
     private func fetchInfo() {
-        guard !urlInput.isEmpty else { return }
+        guard !urlInput.isEmpty, !isLoading else { return }
+        downloadMode = .single
+        showPlaylistSelector = false
         isLoading = true
         errorMessage = nil
         mediaInfo = nil
@@ -812,7 +817,7 @@ struct AddDownloadView: View {
                     selectedSubtitleLangs.removeAll()
                 }
                 
-            } catch { errorMessage = error.localizedDescription }
+            } catch { errorMessage = languageService.downloadErrorMessage(error) }
             isLoading = false
         }
     }
@@ -827,7 +832,7 @@ struct AddDownloadView: View {
                 selectedPlaylistIds = Set(items.map { $0.id })
                 showPlaylistSelector = true
                 downloadMode = .playlist
-            } catch { errorMessage = error.localizedDescription }
+            } catch { errorMessage = languageService.downloadErrorMessage(error) }
             isLoadingPlaylist = false
         }
     }
@@ -892,7 +897,7 @@ struct AddDownloadView: View {
         } else {
             let selectedItems = playlistItems.filter { selectedPlaylistIds.contains($0.id) }
             for item in selectedItems {
-                let videoUrl = "https://www.youtube.com/watch?v=\(item.id)"
+                guard let videoUrl = item.downloadURL else { continue }
                 var itemOptions = finalOptions
                 itemOptions.customFilename = nil 
                 downloadManager.addDownload(url: videoUrl, options: itemOptions)

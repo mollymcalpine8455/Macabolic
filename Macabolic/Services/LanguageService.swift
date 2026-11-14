@@ -3,26 +3,68 @@ import SwiftUI
 enum Language: String, CaseIterable, Identifiable {
     case turkish = "tr"
     case english = "en"
-    
+    case japanese = "ja"
+
     var id: String { self.rawValue }
-    
+
     var displayName: String {
         switch self {
         case .turkish: return "Türkçe"
         case .english: return "English"
+        case .japanese: return "日本語"
         }
     }
 }
 
 class LanguageService: ObservableObject {
-    @AppStorage("selectedLanguage") var selectedLanguage: Language = .english
-    @AppStorage("isFirstLaunch_v3") var isFirstLaunch: Bool = true
-    
-    
-    func s(_ key: String) -> String {
-        return translations[selectedLanguage]?[key] ?? key
+    @Published var selectedLanguage: Language {
+        didSet {
+            UserDefaults.standard.set(selectedLanguage.rawValue, forKey: "selectedLanguage")
+            applyAppleLanguages(for: selectedLanguage)
+        }
     }
-    
+    @AppStorage("isFirstLaunch") var isFirstLaunch: Bool = true
+
+    init() {
+        let savedLanguage = UserDefaults.standard.string(forKey: "selectedLanguage").flatMap(Language.init(rawValue:))
+        let systemLanguage = Locale.preferredLanguages.lazy.compactMap {
+            $0.split(separator: "-").first.flatMap { Language(rawValue: String($0)) }
+        }.first
+        selectedLanguage = savedLanguage ?? systemLanguage ?? .english
+        applyAppleLanguages(for: selectedLanguage)
+    }
+
+    private func applyAppleLanguages(for language: Language) {
+        UserDefaults.standard.set([language.rawValue], forKey: "AppleLanguages")
+    }
+
+    private let japaneseBundle = Bundle.main.path(forResource: "ja", ofType: "lproj").flatMap(Bundle.init(path:))
+
+    func s(_ key: String) -> String {
+        if selectedLanguage == .japanese,
+           let localized = japaneseBundle?.localizedString(forKey: key, value: nil, table: nil),
+           localized != key {
+            return localized
+        }
+        return translations[selectedLanguage]?[key] ?? translations[.english]?[key] ?? key
+    }
+
+    func downloadErrorMessage(_ error: Error) -> String {
+        guard let error = error as? YtdlpError else { return error.localizedDescription }
+        switch error {
+        case .notFound(let reason):
+            if let reason { return String(format: s("ytdlp_setup_failed"), reason) }
+            return s("ytdlp_not_found")
+        case .commandFailed(let output): return String(format: s("ytdlp_command_failed"), output)
+        case .downloadFailed(let output): return String(format: s("download_failed_error"), output)
+        case .tooManyRequests: return s("too_many_requests")
+        case .subtitleError(let output): return String(format: s("subtitle_download_failed"), output)
+        case .noSavedFile: return s("ytdlp_no_saved_file")
+        case .noPlaylistEntries: return s("ytdlp_no_playlist_entries")
+        case .runtimeSetupFailed(let reason): return String(format: s("ytdlp_runtime_failed"), reason)
+        }
+    }
+
     private let translations: [Language: [String: String]] = [
         .turkish: [
             "home": "Ana Sayfa",
@@ -33,7 +75,7 @@ class LanguageService: ObservableObject {
             "keyring": "Kimlik Bilgileri",
             "settings": "Ayarlar",
             "new_download": "Yeni İndirme Ekle",
-            "url_placeholder": "YouTube ve binlerce siteden video indirin",
+            "url_placeholder": "YouTube ve diğer [desteklenen](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) sitelerden video indirin",
             "stat_downloading": "İndiriliyor",
             "stat_queued": "Kuyrukta",
             "stat_completed": "Tamamlandı",
@@ -53,6 +95,7 @@ class LanguageService: ObservableObject {
             "dark": "Koyu",
             "language": "Dil",
             "save_folder": "Varsayılan Kayıt Yeri",
+            "downloads_folder": "İndirilenler",
             "select": "Seç...",
             "updates": "Güncellemeler",
             "check_updates": "Kontrol Et",
@@ -66,7 +109,14 @@ class LanguageService: ObservableObject {
             "concurrent_downloads": "Eşzamanlı İndirmeler",
             "max": "Maksimum",
             "sponsorblock_desc": "SponsorBlock, YouTube videolarındaki sponsor segmentlerini otomatik olarak atlar.",
+            "ytdlp_not_found": "yt-dlp bulunamadı. Ayarlar → Gelişmiş bölümünden güncelleyin.",
+            "ytdlp_setup_failed": "yt-dlp kurulamadı. %@",
+            "ytdlp_command_failed": "yt-dlp komutu başarısız oldu. %@",
+            "ytdlp_no_saved_file": "yt-dlp kaydedilen dosyanın konumunu bildirmedi.",
+            "ytdlp_no_playlist_entries": "İndirilebilir oynatma listesi öğesi yok.",
+            "ytdlp_runtime_failed": "YouTube için JavaScript hazırlanamadı. Deno’yu kurun veya tekrar deneyin. %@",
             "ytdlp_update": "yt-dlp'yi Güncelle",
+            "youtube_runtime_setup": "YouTube için JavaScript kurulumu (Deno önerilir)",
             "update_complete": "✅ Güncelleme tamamlandı!",
             "update_error": "❌ Hata:",
             "downloading_ytdlp": "İndiriliyor...",
@@ -82,45 +132,57 @@ class LanguageService: ObservableObject {
             "empty_completed": "Tamamlandı indirme yok",
             "video": "Video",
             "audio": "Ses",
+            "audio_quality": "Ses Kalitesi",
             "default_video_resolution": "Varsayılan Video Çözünürlüğü",
             "sponsorblock": "SponsorBlock",
             "app_updates": "Uygulama Güncellemesi",
-            "app_up_to_date": "Uygulama güncel",
-            "downloading_update": "Güncelleme indiriliyor...",
-            "installing_update": "Güncelleme kuruluyor ve yeniden başlatılıyor...",
-            "update_failed": "Güncelleme başarısız oldu!",
-            "restart_to_install": "Yeniden Başlat ve Kur",
-            "update_available_title": "Yeni Güncelleme Mevcut!",
-            "update_available_message": "Macabolic'in yeni sürümü (v%@) hazır. Şimdi indirmek ister misiniz?",
-            "later": "Daha Sonra",
-            "whats_new_title": "Macabolic v3.1.0 - Yenilikler 🚀",
-            "whats_new_message": "✨ Yeni Özellikler (Beta):\n• Menü Barı Uygulaması: İndirmelerinizi doğrudan menü çubuğundan yönetin.\n• Chrome & Firefox Eklentisi: Tarayıcınızdan tek tıkla indirme başlatın.\n• Bildirim Desteği: İndirmeler bittiğinde anında haberdar olun.\n• Otomatik Başlatma: Mac'iniz açıldığında Macabolic hazır olsun.\n\n🔧 Diğer Önemli Değişiklikler:\n• UI İyileştirmeleri: Ana sayfa düzeni ve tam ekran deneyimi büyük ekranlar için optimize edildi.\n• Yerelleştirme Düzeltmeleri: Klasör seçim sayfalarındaki hardcoded \"Seç\" butonu düzeltildi.\n• Sponsorlar & Topluluk: Sponsor listesi güncellendi ve sabit \"GitHub'da Yıldızla\" butonu eklendi. Iman Montajabi ve Semmelstulle'ye teşekkürler.\n• Preset sorunları giderildi.\n• Sosyal medyada paylaşma özelliği eklendi.",
-            "star_github": "GitHub'da Yıldızla",
-            "special_thanks_sidebar": "Özel destekleri için",
-            "for_support": "teşekkür ederiz.",
             "latest": "En son",
             "original_project": "Orijinal Proje",
+            "macos_port": "macOS Portu",
+            "video_downloading": "Video İndirme",
             "view_license": "Lisansı Görüntüle",
             "app_desc": "YouTube ve binlerce siteden video indirmenizi sağlayan modern bir macOS uygulaması.",
             "extra_settings": "Ekstra Ayarlar",
-            "video_url": "Video URL'si",
-            "url_hint": "YouTube, Vimeo, Twitter ve daha fazlası...",
-            "additional_arguments": "Ek Komutlar (Advanced)",
+            "video_url": "Video / Playlist URL",
+            "url_hint": "YouTube, Instagram, X (Twitter) video veya oynatma listesi linki...",
+            "additional_arguments": "Ek Komutlar (Komut Satırı)",
+
             "additional_arguments_hint": "Örn: --limit-rate 5M --restrict-filenames",
             "additional_arguments_help": "Tüm komutları görmek için [resmi dokümantasyona](https://github.com/yt-dlp/yt-dlp#usage-and-options) bakabilirsiniz.",
+            "no_subtitles": "Altyazı bulunamadı",
+            "whats_new_title": "Macabolic v3.1.1 - Yenilikler",
+            "whats_new_message": "Japonca dil desteği eklendi ve güncel yt-dlp ile indirme uyumluluğu iyileştirildi.",
+            "star_github": "GitHub'da Yıldızla",
+            "special_thanks_sidebar": "Özel destekleri için",
+            "for_support": "teşekkür ederiz.",
             "paste_from_clipboard": "Panodan Yapıştır",
             "fetch_info": "Bilgi Al",
             "quality": "Kalite",
             "custom_filename_hint": "Dosya adı (boş bırakılırsa video başlığı kullanılır)",
             "subtitles": "Altyazılar",
             "download_subtitles": "Altyazıları indir",
+            "subtitles_selected": "%d dil seçildi",
             "languages": "Diller:",
+            "all_versions": "Tüm Sürümler",
+            "select_version": "Sürüm Seç...",
+            "install": "Kur",
+            "internal": "Dahili",
+            "auto_subs": "Otomatik (Auto)",
+            "auto_subtitle_label": "%@ (Otomatik)",
             "embed_video": "Videoya göm",
             "embedded_data": "Gömülü Veriler",
             "metadata_desc": "Metadata göm (başlık, sanatçı vb.)",
             "split_chapters": "Bölümlere ayır",
             "sponsorblock_hint": "SponsorBlock (reklamları atla)",
+            "playlist_detected": "Oynatma listesi algılandı!",
+            "load_playlist": "Listeyi Yükle",
+            "select_all": "Tümünü Seç",
+            "deselect_all": "Seçimleri Kaldır",
+            "download_selected": "Seçilenleri İndir (%d)",
+            "single_video": "Sadece Bu Video",
+            "entire_playlist": "Tüm Liste",
             "cancel": "İptal",
+            "ok": "Tamam",
             "download_btn": "İndir",
             "clear_history": "Geçmişi Temizle",
             "history_empty": "İndirme geçmişi boş",
@@ -144,6 +206,7 @@ class LanguageService: ObservableObject {
             "processing": "İşleniyor",
             "failed": "Hata",
             "paused": "Duraklatıldı",
+            "stopped": "Durduruldu",
             "stop_all": "Tümünü Durdur",
             "finder": "Finder'da Göster",
             "retry": "Tekrarla / Devam Et",
@@ -156,9 +219,27 @@ class LanguageService: ObservableObject {
             "codec": "Codec",
             "auto_h264": "Otomatik (H.264)",
             "codec_warning": "Not: 1080p üzeri çözünürlükler için lütfen AV1 veya VP9 codec'ini seçin.",
-            "support_btn": "Macabolic'i Destekleyin",
             "clear": "Temizle",
             "format": "Format",
+            "support_btn": "Destek Ol",
+            "res_best": "En İyi",
+            "res_worst": "En Düşük",
+            "app_up_to_date": "Uygulama güncel",
+            "downloading_update": "Güncelleme indiriliyor...",
+            "installing_update": "Güncelleme kuruluyor...",
+            "update_available_title": "Yeni Güncelleme Mevcut!",
+            "update_available_message": "Macabolic'in yeni sürümü (v%@) hazır. Şimdi indirmek ister misiniz?",
+            "later": "Daha Sonra",
+            "restart": "Yeniden Başlat",
+            "update_ready_title": "Güncelleme Kuruldu",
+            "update_ready_message": "Yeni sürüm başarıyla kuruldu. Değişikliklerin etkili olması için lütfen önce bu pencereyi kapatın, ardından önce kırmızı butonla ayarları kapatın, ardından 'Command + Q' ile uygulamadan tamamen çıkıp tekrar başlatın.",
+            "legal_disclaimer_title": "Yasal Uyarı & Kullanım Şartları",
+            "legal_disclaimer_message": "YouTube ve diğer sitelerdeki videolar DMCA (Telif Hakkı) korumasına tabi olabilir. Macabolic geliştiricileri, bu uygulamanın yasaları ihlal eden şekilde kullanılmasını onaylamaz ve bundan sorumlu değildir.\n\nBu araç yalnızca kişisel kullanım, eğitim veya araştırma amaçlıdır. YouTube videolarını indirmek, videoda açık bir indirme butonu yoksa veya içerik indirmeye izin veren bir lisansa sahip değilse, Hizmet Şartlarını ihlal edebilir.\n\nBu uygulamayı kullanarak, indirdiğiniz tüm içeriklerin ve bunları nasıl kullandığınızın tüm sorumluluğunu üstlenmiş olursunuz. Geliştirici, bu aracın telif haklarını çiğnemek veya platform kurallarını ihlal etmek amacıyla kötüye kullanılmasını uygun görmez veya desteklemez.",
+            "welcome_title": "Macabolic'e Hoş Geldiniz",
+            "select_language": "Lütfen tercih ettiğiniz dili seçin:",
+            "start_using": "Kullanmaya Başla",
+            "language_changed_title": "Dil Değiştirildi",
+            "language_changed_message": "Uygulama içi dil başarıyla değiştirildi.\n\nmacOS üst menü barının da değişmesi için lütfen önce Tamam'a basın, ardından sol üstteki kırmızı butonla ayarları kapatın ve Command+Q ile uygulamayı tamamen kapatıp yeniden açın.",
             "browser_cookies": "Giriş Kaynağı (Cookies)",
             "none": "Yok",
             "browser_hint": "Lütfen daha önce YouTube hesabınızla giriş yaptığınız bir tarayıcı seçiniz. macOS ilk kullanımda anahtar zinciri erişimi için şifre isteyebilir; 'Her Zaman İzin Ver'i seçerek süreci kalıcı olarak onaylayabilirsiniz.",
@@ -179,12 +260,22 @@ class LanguageService: ObservableObject {
             "preset_max_compatibility_desc": "H.264 + AAC, Tüm cihazlarda çalışır",
             "preset_smallest_size_desc": "AV1 720p, En küçük dosya boyutu",
             "preset_audio_only_desc": "Sadece ses indir (M4A)",
-            "apply_preset": "Preseti Uygula",
+            "apply_preset": "Uygula",
             "preferred_video_codec": "Tercih Edilen Video Codec",
             "preferred_audio_codec": "Tercih Edilen Ses Codec",
             "codec_fallback_note": "Not: Seçilen codec mevcut değilse otomatik olarak en iyi alternatif seçilir.",
-            "res_best": "En İyi",
-            "res_worst": "En Düşük",
+            "custom_presets": "Özel Presetler",
+            "create_preset": "Yeni Preset Oluştur",
+            "preset_name": "Preset Adı",
+            "delete_preset": "Preseti Sil",
+            "no_custom_presets": "Henüz özel preset oluşturmadınız",
+            "save_as_preset": "Preset Olarak Kaydet",
+            "quick_presets": "Hızlı Presetler",
+            "default_subtitle_lang": "Varsayılan Altyazı Dili",
+            "embed_subtitles_preset": "Altyazıları Göm",
+            "subtitle_lang_hint": "Dil kodu (orn: tr, en)",
+            "preset_options": "Preset Ayarları",
+            "edit_preset": "Preseti Düzenle",
             "subtitle_format": "Altyazı Formatı",
             "file_exists_title": "Dosya Zaten Mevcut",
             "file_exists_message": "Bu isimde bir dosya zaten var. Ne yapmak istersiniz?",
@@ -195,6 +286,15 @@ class LanguageService: ObservableObject {
             "subtitle_external": "Ayrı Dosya",
             "subtitle_embedded": "Gömülü",
             "h264_preset_info": "H.264 codec seçildi. Maksimum kalite 1080p ile sınırlıdır.",
+            "first_sponsor": "Sponsorlar",
+            "future_sponsor": "Sponsorlar",
+            "future_sponsor_desc": "Desteğiniz için teşekkürler!",
+            "first_support_received": "İlk destek geldi!",
+            "share_on_social": "Sosyal Medyada Paylaş",
+            "share_msg_x": "#Macabolic ile videoları zahmetsizce indirin! 🚀 macOS üzerindeki en iyi yerel deneyim. https://github.com/alinuxpengui/Macabolic",
+            "share_msg_mastodon": "#Macabolic ile videoları zahmetsizce indirin! 🚀 macOS üzerindeki en iyi yerel deneyim. https://github.com/alinuxpengui/Macabolic",
+            "share_msg_bluesky": "#Macabolic ile videoları zahmetsizce indirin! 🚀 macOS üzerindeki en iyi yerel deneyim. https://github.com/alinuxpengui/Macabolic",
+            "share_msg_threads": "#Macabolic ile videoları zahmetsizce indirin! 🚀 macOS üzerindeki en iyi yerel deneyim. https://github.com/alinuxpengui/Macabolic",
             "download_completed_title": "İndirme Tamamlandı",
             "download_completed_body": "%@ başarıyla indirildi.",
             "download_failed_title": "İndirme Hatası",
@@ -210,7 +310,7 @@ class LanguageService: ObservableObject {
             "custom": "Özel",
             "notifications": "Bildirimler",
             "show_menubar_icon": "Menü Çubuğu Simgesini Göster",
-            "first_sponsor": "İlk Sponsor",
+            "test_notification_filename": "Macabolic Testi",
             "test_notification": "Test Bildirimi Gönder"
         ],
         .english: [
@@ -222,9 +322,9 @@ class LanguageService: ObservableObject {
             "keyring": "Keyring",
             "settings": "Settings",
             "new_download": "Add New Download",
-            "url_placeholder": "Download video from YouTube and thousands of sites",
+            "url_placeholder": "Download video from YouTube and other [supported](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) sites",
             "stat_downloading": "Downloading",
-            "stat_queued": "Queued",
+            "stat_queued": "In Queue",
             "stat_completed": "Completed",
             "stat_failed": "Failed",
             "empty_failed": "No failed downloads",
@@ -242,6 +342,7 @@ class LanguageService: ObservableObject {
             "dark": "Dark",
             "language": "Language",
             "save_folder": "Default Save Folder",
+            "downloads_folder": "Downloads",
             "select": "Select...",
             "updates": "Updates",
             "check_updates": "Check for Updates",
@@ -255,7 +356,14 @@ class LanguageService: ObservableObject {
             "concurrent_downloads": "Concurrent Downloads",
             "max": "Maximum",
             "sponsorblock_desc": "SponsorBlock automatically skips sponsor segments in YouTube videos.",
+            "ytdlp_not_found": "yt-dlp not found. Open Settings → Advanced to update it.",
+            "ytdlp_setup_failed": "yt-dlp setup failed. %@",
+            "ytdlp_command_failed": "yt-dlp command failed. %@",
+            "ytdlp_no_saved_file": "yt-dlp did not report a saved media file.",
+            "ytdlp_no_playlist_entries": "No downloadable playlist entries.",
+            "ytdlp_runtime_failed": "Could not set up JavaScript for YouTube. Install Deno or retry. %@",
             "ytdlp_update": "Update yt-dlp",
+            "youtube_runtime_setup": "Set up JavaScript for YouTube (Deno recommended)",
             "update_complete": "✅ Update complete!",
             "update_error": "❌ Error:",
             "downloading_ytdlp": "Downloading...",
@@ -271,21 +379,54 @@ class LanguageService: ObservableObject {
             "empty_completed": "No completed downloads",
             "video": "Video",
             "audio": "Audio",
+            "audio_quality": "Audio Quality",
             "default_video_resolution": "Default Video Resolution",
             "sponsorblock": "SponsorBlock",
             "app_updates": "App Updates",
-            "app_up_to_date": "App is up to date",
-            "downloading_update": "Downloading update...",
-            "installing_update": "Installing update & restarting...",
-            "update_failed": "Update failed!",
-            "restart_to_install": "Restart and Install",
-            "update_available_title": "New Update Available!",
-            "update_available_message": "A new version of Macabolic (v%@) is ready. Would you like to download it now?",
-            "later": "Later",
             "latest": "Latest",
             "original_project": "Original Project",
+            "macos_port": "macOS Port",
+            "video_downloading": "Video Downloading",
             "view_license": "View License",
+            "app_desc": "A modern macOS application that allows you to download videos from YouTube and thousands of sites.",
+            "extra_settings": "Extra Settings",
+            "video_url": "Video / Playlist URL",
+            "url_hint": "YouTube, Instagram, X (Twitter) video or playlist link...",
+            "no_subtitles": "No subtitles found",
+            "additional_arguments": "Additional Arguments (Command Line)",
+            "additional_arguments_hint": "e.g. --limit-rate 5M --restrict-filenames",
+            "additional_arguments_help": "Check the [official documentation](https://github.com/yt-dlp/yt-dlp#usage-and-options) for all available commands.",
+            "whats_new_title": "Macabolic v3.1.1 - What's New?",
+            "whats_new_message": "Added Japanese localization and improved download compatibility with current yt-dlp releases.",
+            "sponsor": "Sponsor",
+            "paste_from_clipboard": "Paste from Clipboard",
+            "fetch_info": "Get Video Information",
+            "quality": "Quality",
+            "custom_filename_hint": "Custom Filename (optional)",
+            "subtitles": "Subtitles",
+            "download_subtitles": "Download Subtitles",
+            "subtitles_selected": "%d languages selected",
+            "languages": "Languages:",
+            "all_versions": "All Versions",
+            "select_version": "Select Version...",
+            "install": "Install",
+            "internal": "Internal",
+            "auto_subs": "Auto-generated",
+            "auto_subtitle_label": "%@ (Auto-generated)",
+            "embed_video": "Embed into Video",
+            "embedded_data": "Embedded Data",
+            "metadata_desc": "Embed Metadata (Title, Artist, etc.)",
+            "split_chapters": "Split into Chapters",
+            "sponsorblock_hint": "SponsorBlock (skip ads/intro)",
+            "playlist_detected": "Playlist detected!",
+            "load_playlist": "Load Playlist",
+            "select_all": "Select All",
+            "deselect_all": "Deselect All",
+            "download_selected": "Download Selected (%d)",
+            "single_video": "Single Video",
+            "entire_playlist": "Entire Playlist",
             "cancel": "Cancel",
+            "ok": "OK",
             "download_btn": "Download",
             "clear_history": "Clear History",
             "history_empty": "Download history is empty",
@@ -298,17 +439,18 @@ class LanguageService: ObservableObject {
             "keyring_empty": "No credentials",
             "keyring_desc": "Add credentials to access password-protected content",
             "add_credential": "Add Credential",
-            "new_credential": "New Credential",
+            "new_credential": "Add Credential",
             "edit_credential": "Edit Credential",
             "name_hint": "Name (e.g. YouTube Premium)",
             "name": "Name",
             "username": "Username",
             "password": "Password",
             "save": "Save",
-            "fetching": "Fetching Info...",
-            "processing": "Processing...",
+            "fetching": "Retrieving Information...",
+            "processing": "Finalizing Download...",
             "failed": "Failed",
             "paused": "Paused",
+            "stopped": "Stopped",
             "stop_all": "Stop All",
             "finder": "Show in Finder",
             "retry": "Retry / Resume",
@@ -317,28 +459,38 @@ class LanguageService: ObservableObject {
             "remove": "Remove",
             "download_log": "Download Log",
             "close": "Close",
-            "no_log": "No log yet...",
+            "no_log": "No logs available.",
             "codec": "Codec",
             "auto_h264": "Auto (H.264)",
             "codec_warning": "Note: For resolutions higher than 1080p, please select AV1 or VP9 codec.",
             "clear": "Clear",
-            "support_btn": "Support Macabolic",
             "format": "Format",
+            "support_btn": "Support Macabolic",
+            "res_best": "Best Quality",
+            "res_worst": "Worst Quality",
+            "app_up_to_date": "App is up to date",
+            "downloading_update": "Downloading update...",
+            "installing_update": "Installing update...",
+            "update_available_title": "New Update Available!",
+            "update_available_message": "A new version of Macabolic (v%@) is ready. Would you like to download it now?",
+            "later": "Later",
+            "restart": "Restart",
+            "update_ready_title": "Update Installed",
+            "update_ready_message": "The new version has been installed successfully. To apply the changes, please close this window first, then close the settings with the red button, and finally quit the app completely with 'Command + Q' and restart it.",
+            "legal_disclaimer_title": "Legal Copyright Disclaimer",
+            "legal_disclaimer_message": "Videos on YouTube and other sites may be subject to DMCA protection. The authors of Macabolic do not endorse, and are not responsible for, the use of this application in means that will violate these laws.\n\nThis tool is intended solely for personal use and educational or research purposes. Downloading videos from YouTube may violate their Terms of Service unless the video has an explicit download button or the content is licensed in a way that permits downloading.\n\nBy using this app, you assume full responsibility for any content you download and how you use it. The developer does not condone or support any misuse of this tool to infringe upon copyrights or violate platform rules.",
+            "welcome_title": "Welcome to Macabolic",
+            "select_language": "Please select your preferred language:",
+            "start_using": "Get Started",
+            "language_changed_title": "Language Changed",
+            "language_changed_message": "The in-app language has been changed successfully.\n\nTo also change the macOS menu bar language, please click OK first, then close the settings using the red button in the top-left corner, and quit the app completely with Command+Q before reopening it.",
             "browser_cookies": "Login Source (Cookies)",
             "none": "None",
             "browser_hint": "Please select a browser where you have previously logged in with your YouTube account. macOS may ask for keychain access on first use; select 'Always Allow' to permanently authorize this.",
             "fix_signin_error": "Fix in Settings",
             "safari_warning": "Note: For Safari cookies, you must grant 'Full Disk Access' to Macabolic in System Settings > Privacy & Security. Using a browser other than Safari (Chrome, Brave, etc.) will be much easier.",
             "open_system_settings": "Open System Settings",
-            "whats_new_title": "Macabolic v3.1.0 - What's New? 🚀",
-            "whats_new_message": "✨ New Features (Beta):\n• Menu Bar App: Manage your downloads directly from the menu bar.\n• Chrome & Firefox Extension: Start downloads with one click from your browser.\n• Notification Support: Get notified instantly when downloads are finished.\n• Auto-launch: Macabolic is ready when your Mac starts.\n\n🔧 Other Important Changes:\n• UI Improvements: Optimized home view layout and full-screen experience for large displays.\n• Localization Fixes: Fixed hardcoded \"Select\" button in folder selection sheets.\n• Sponsors & Community: Updated sponsor list and added a static \"Star on GitHub\" button. Thanks for the Iman Montajabi and Semmelstulle.\n• Preset issues resolved.\n• Share on social media feature added.",
-            "star_github": "Star on GitHub",
-            "special_thanks_sidebar": "Special thanks to",
-            "for_support": "for their support.",
             "video_codec": "Video Codec",
-            "additional_arguments": "Additional Arguments (Command Line)",
-            "additional_arguments_hint": "e.g. --limit-rate 5M --restrict-filenames",
-            "additional_arguments_help": "Check the [official documentation](https://github.com/yt-dlp/yt-dlp#usage-and-options) for all available commands.",
             "audio_codec": "Audio Codec",
             "codec_auto": "Auto (Best Available)",
             "codec_settings": "Codec Settings",
@@ -352,12 +504,22 @@ class LanguageService: ObservableObject {
             "preset_max_compatibility_desc": "H.264 + AAC, Works on all devices",
             "preset_smallest_size_desc": "AV1 720p, Smallest file size",
             "preset_audio_only_desc": "Download audio only (M4A)",
-            "apply_preset": "Apply Preset",
+            "apply_preset": "Apply",
             "preferred_video_codec": "Preferred Video Codec",
             "preferred_audio_codec": "Preferred Audio Codec",
             "codec_fallback_note": "Note: If selected codec is unavailable, the best alternative will be used.",
-            "res_best": "Best",
-            "res_worst": "Worst",
+            "custom_presets": "Custom Presets",
+            "create_preset": "Create New Preset",
+            "preset_name": "Preset Name",
+            "delete_preset": "Delete Preset",
+            "no_custom_presets": "You haven't created any custom presets yet",
+            "save_as_preset": "Save as Preset",
+            "quick_presets": "Quick Presets",
+            "default_subtitle_lang": "Default Subtitle Language",
+            "embed_subtitles_preset": "Embed Subtitles",
+            "subtitle_lang_hint": "Language code (e.g., en, es)",
+            "preset_options": "Preset Options",
+            "edit_preset": "Edit Preset",
             "subtitle_format": "Subtitle Format",
             "file_exists_title": "File Already Exists",
             "file_exists_message": "A file with this name already exists. What would you like to do?",
@@ -368,6 +530,18 @@ class LanguageService: ObservableObject {
             "subtitle_external": "Separate File",
             "subtitle_embedded": "Embedded",
             "h264_preset_info": "H.264 codec selected. Maximum quality is limited to 1080p.",
+            "first_sponsor": "Sponsors",
+            "future_sponsor": "Sponsors",
+            "future_sponsor_desc": "Thanks for your support!",
+            "first_support_received": "First support received!",
+            "share_on_social": "Share on Social",
+            "star_github": "Star on GitHub",
+            "special_thanks_sidebar": "Special thanks to",
+            "for_support": "for their support.",
+            "share_msg_x": "Downloading videos effortlessly with #Macabolic! 🚀 Best native experience on macOS. https://github.com/alinuxpengui/Macabolic",
+            "share_msg_mastodon": "Downloading videos effortlessly with #Macabolic! 🚀 Best native experience on macOS. https://github.com/alinuxpengui/Macabolic",
+            "share_msg_bluesky": "Downloading videos effortlessly with #Macabolic! 🚀 Best native experience on macOS. https://github.com/alinuxpengui/Macabolic",
+            "share_msg_threads": "Downloading videos effortlessly with #Macabolic! 🚀 Best native experience on macOS. https://github.com/alinuxpengui/Macabolic",
             "download_completed_title": "Download Completed",
             "download_completed_body": "%@ has been downloaded successfully.",
             "download_failed_title": "Download Failed",
@@ -383,7 +557,7 @@ class LanguageService: ObservableObject {
             "custom": "Custom",
             "notifications": "Notifications",
             "show_menubar_icon": "Show Menu Bar Icon",
-            "first_sponsor": "First Sponsor",
+            "test_notification_filename": "Macabolic Test",
             "test_notification": "Send Test Notification"
         ]
     ]

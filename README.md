@@ -1,20 +1,11 @@
 # Macabolic 🚀
 
-A modern, fast, and beautiful video downloader for macOS. Powered by `yt-dlp`.
+A macOS video and audio downloader powered by `yt-dlp`. This fork of [alinuxpengui/Macabolic](https://github.com/alinuxpengui/Macabolic) adds Japanese and support for current yt-dlp releases.
+
+**[Download this fork for macOS](https://github.com/mollymcalpine8455/Macabolic/releases)** · **[日本語の使い方](#日本語で使う)**
 
 <div align="center">
   <img src="Macabolic/Resources/Assets.xcassets/AppIcon.appiconset/icon_128x128.png" width="128" />
-  <p>
-    <a href="https://github.com/alinuxpengui/Macabolic/releases/latest/download/Macabolic-v3.1.0.dmg">
-      <img src="https://img.shields.io/badge/Download-macOS-blue?style=for-the-badge&logo=apple&logoColor=white" alt="Download Macabolic for macOS" />
-    </a>
-    <a href="https://github.com/alinuxpengui/homebrew-macabolic">
-      <img src="https://img.shields.io/badge/Homebrew-tap-FBB040?style=for-the-badge&logo=homebrew&logoColor=white" alt="Install via Homebrew" />
-    </a>
-    <a href="https://github.com/alinuxpengui/Macabolic/releases">
-      <img src="https://img.shields.io/github/downloads/alinuxpengui/Macabolic/total?style=for-the-badge&color=818cf8" alt="Total Downloads" />
-    </a>
-  </p>
   <p>
     <a href="https://mastodon.social/@macabolic_app">
       <img src="https://img.shields.io/badge/Follow-Mastodon-2b90d9?style=for-the-badge&logo=mastodon&logoColor=white" alt="Follow on Mastodon" />
@@ -47,7 +38,7 @@ Macabolic is a native macOS frontend for the powerful [yt-dlp](https://github.co
 
 ---
 
-## Support My Journey ❤️
+## Support the upstream project ❤️
 
 **Note on Sponsorships:**  
 Direct financial support via GitHub Sponsors is currently disabled due to local tax and regulatory complexities. While I truly appreciate the generosity of everyone who wanted to contribute, the best way to support Macabolic right now is by **starring the repository**, reporting bugs, or sharing the project with the community. Thank you for understanding! 🙏
@@ -59,6 +50,37 @@ To show my gratitude, the **first 5 sponsors** of any amount will be **permanent
 2. [**Semmelstulle**](https://github.com/Semmelstulle) 🌟
 
 ---
+
+## 日本語で使う
+
+[Releases](https://github.com/mollymcalpine8455/Macabolic/releases) の **Assets** から macOS 用ZIPをダウンロードして展開します。macOS 12以降のIntel Mac、Apple Silicon Macに対応しています。試用版はApple未公証です。
+
+初回起動画面、または **Settings → General → Language** で **日本語** を選択できます。
+macOS標準のメニューにも反映するには、アプリを終了してから開き直してください。
+
+## yt-dlp compatibility build
+
+This fork adds Japanese localization and updates the download integration. These changes were made on 2026-11-14 and tested with [yt-dlp 2026.10.26](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26).
+
+- Under **Settings → Advanced**, **Update yt-dlp** downloads the current stable macOS executable from yt-dlp. The update is checked before replacing the previous executable.
+- The first YouTube request uses a supported local JavaScript runtime or downloads a verified Deno 2.9.8 archive into Macabolic's Application Support directory. See the [yt-dlp EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS) for details.
+- Macabolic checks Homebrew's standard locations for both FFmpeg and FFprobe. Install them with `brew install ffmpeg` if post-processing reports a missing dependency.
+- Extra yt-dlp arguments can be entered in the download dialog. The app ignores global yt-dlp configuration files so their format and output settings cannot override the GUI by accident. Pass `--config-locations` in the dialog to use a specific config file for a download.
+
+To build from this source, use Xcode 15 or later:
+
+```sh
+xcodebuild -project Macabolic.xcodeproj -scheme Macabolic -configuration Release \
+  -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+```
+
+The app is in `build/Build/Products/Release`. To reproduce the standalone ZIP
+with the Xcode Command Line Tools and Python 3, run
+`python3 scripts/build-release.py build/Macabolic-macOS.zip`.
+
+Set `MACABOLIC_RELEASE_REPOSITORY=OWNER/REPO` when building in Xcode to use
+a repository that publishes DMG updates. This fork distributes its ZIPs
+through GitHub Releases.
 
 ## Roadmap 🗺️
 
@@ -89,10 +111,10 @@ Here is what I'm planning to bring to Macabolic in the near future:
   - **SponsorBlock** integration to automatically skip sponsors and intros.
   - Playlist downloading support.
   - Concurrent download management.
-- **Multi-language:** Supports English and Turkish (automatically detects system language).
+- **Multi-language:** Supports English, Turkish, and Japanese (selectable in the app).
 - **Auto-Update:** Self-manages `yt-dlp` updates to ensure maximum compatibility.
 
-## Installation 🚀
+## Upstream installation 🚀
 
 ### Option 1: Homebrew (Recommended)
 
@@ -135,8 +157,8 @@ xattr -cr /Applications/Macabolic.app
 ## Build Requirements 🛠️
 
 - macOS 12.0 or later (Monterey+)
-- Xcode 14.0 or later
-- Swift 5.7+
+- Xcode 15.0 or later
+- Swift 5.9+
 
 ## Credits ❤️
 
@@ -155,7 +177,7 @@ By using this app, you assume full responsibility for any content you download a
 This project is licensed under the **GNU General Public License v3.0**. See the [LICENSE](LICENSE) file for details.
 
 ---
-**Maintained by [alinuxpengui](https://github.com/alinuxpengui)**
+**Original Macabolic project by [alinuxpengui](https://github.com/alinuxpengui)**
 
 ## Star History
 

@@ -21,9 +21,8 @@ struct PreferencesView: View {
     
     @EnvironmentObject var languageService: LanguageService
     @EnvironmentObject var updateChecker: UpdateChecker
-    @EnvironmentObject var downloadManager: DownloadManager
-    @State private var isUpdatingYtdlp = false
-    @State private var ytdlpUpdateMessage: String?
+    @EnvironmentObject var ytdlpService: YtdlpService
+    @State private var ytdlpUpdated = false
     @State private var selectedReleaseId: Int? = nil
     @State private var showLanguageChangeAlert = false
     @State private var previousLanguage: Language? = nil
@@ -176,8 +175,10 @@ struct PreferencesView: View {
             languageSection
             saveFolderSection
             launchAtLoginSection
-            appUpdatesSection
-            allVersionsSection
+            if updateChecker.isConfigured {
+                appUpdatesSection
+                allVersionsSection
+            }
         }
         .macabolicFormStyle()
         .padding()
@@ -203,7 +204,7 @@ struct PreferencesView: View {
             Toggle(languageService.s("notifications"), isOn: $showNotifications)
             if showNotifications {
                 Button(languageService.s("test_notification")) {
-                    NotificationService.shared.sendDownloadCompleted(filename: "Macabolic Test", languageService: languageService)
+                    NotificationService.shared.sendDownloadCompleted(filename: languageService.s("test_notification_filename"), languageService: languageService)
                 }
                 .buttonStyle(.link)
                 .controlSize(.small)
@@ -237,7 +238,7 @@ struct PreferencesView: View {
     private var saveFolderSection: some View {
         Section(languageService.s("save_folder")) {
             HStack {
-                TextField(languageService.s("save_folder"), text: .constant(defaultSaveFolder.isEmpty ? (languageService.selectedLanguage == .turkish ? "İndirilenler" : "Downloads") : defaultSaveFolder))
+                TextField(languageService.s("save_folder"), text: .constant(defaultSaveFolder.isEmpty ? languageService.s("downloads_folder") : defaultSaveFolder))
                     .textFieldStyle(.roundedBorder)
                     .disabled(true)
                 
@@ -772,25 +773,35 @@ struct PreferencesView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("yt-dlp")
                         .fontWeight(.medium)
-                    if let version = downloadManager.ytdlpVersion {
+                    if let version = ytdlpService.version {
                         Text("\(languageService.s("version")): \(version)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
                 Spacer()
-                if isUpdatingYtdlp {
+                if ytdlpService.isUpdating {
                     ProgressView()
                         .scaleEffect(0.7)
-                } else if let message = ytdlpUpdateMessage {
-                    Text(message)
-                        .font(.caption)
                 } else {
                     Button(languageService.s("update_now")) {
-                        updateYtdlp()
+                        Task {
+                            ytdlpUpdated = false
+                            await ytdlpService.updateYtdlp()
+                            ytdlpUpdated = ytdlpService.updateError == nil && ytdlpService.version != nil
+                        }
                     }
                 }
             }
+            if let error = ytdlpService.updateError {
+                Text(languageService.s("update_error") + " " + error)
+                    .font(.caption).foregroundColor(.secondary)
+            } else if ytdlpUpdated && !ytdlpService.isUpdating {
+                Text(languageService.s("update_complete")).font(.caption)
+            }
+            Link(languageService.s("youtube_runtime_setup"),
+                 destination: URL(string: "https://github.com/yt-dlp/yt-dlp/wiki/EJS")!)
+                .font(.caption)
         }
     }
 
@@ -848,7 +859,7 @@ struct PreferencesView: View {
                     .font(.title)
                     .fontWeight(.bold)
                 
-                Text(languageService.s("version") + " \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1.0")")
+                Text(languageService.s("version") + " \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "3.1.1")")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
@@ -965,41 +976,7 @@ struct PreferencesView: View {
             defaultSaveFolder = url.path
         }
     }
-    
-    private func updateYtdlp() {
-        isUpdatingYtdlp = true
-        ytdlpUpdateMessage = nil
-        
-        Task {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let macabolicDir = appSupport.appendingPathComponent("Macabolic")
-            let destination = macabolicDir.appendingPathComponent("yt-dlp")
-            
-            do {
-                try FileManager.default.createDirectory(at: macabolicDir, withIntermediateDirectories: true)
-                
-                let downloadURL = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos")!
-                let (tempURL, _) = try await URLSession.shared.download(from: downloadURL)
-                
-                if FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.removeItem(at: destination)
-                }
-                
-                try FileManager.default.moveItem(at: tempURL, to: destination)
-                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
-                
-                await MainActor.run {
-                    ytdlpUpdateMessage = languageService.s("update_complete")
-                    isUpdatingYtdlp = false
-                }
-            } catch {
-                await MainActor.run {
-                    ytdlpUpdateMessage = languageService.s("update_error") + " \(error.localizedDescription)"
-                    isUpdatingYtdlp = false
-                }
-            }
-        }
-    }
+
 }
 
 

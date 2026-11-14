@@ -22,6 +22,8 @@
 		E0001021 /* LoginItemHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000021; };
 		E0001022 /* MenuBarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000022; };
 		E0001023 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000023; };
+		E0001024 /* LanguageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000024; };
+		E0001025 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = E0000026; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +45,9 @@
 		E0000021 /* LoginItemHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemHelper.swift; sourceTree = "<group>"; };
 		E0000022 /* MenuBarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarManager.swift; sourceTree = "<group>"; };
 		E0000023 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		E0000024 /* LanguageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageService.swift; sourceTree = "<group>"; };
+		E0000025 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		E0000027 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -101,6 +106,7 @@
 				E0000020 /* NotificationService.swift */,
 				E0000021 /* LoginItemHelper.swift */,
 				E0000022 /* MenuBarManager.swift */,
+				E0000024 /* LanguageService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -123,6 +129,7 @@
 			children = (
 				E0000011 /* Assets.xcassets */,
 				E0000014 /* InfoPlist.strings */,
+				E0000026 /* Localizable.strings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -143,8 +150,17 @@
 			children = (
 				E0000015 /* en */,
 				E0000016 /* tr */,
+				E0000025 /* ja */,
 			);
 			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+		E0000026 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				E0000027 /* ja */,
+			);
+			name = Localizable.strings;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -189,6 +205,7 @@
 			knownRegions = (
 				en,
 				tr,
+				ja,
 				Base,
 			);
 			mainGroup = E0003001;
@@ -208,6 +225,7 @@
 			files = (
 				E0001011 /* Assets.xcassets in Resources */,
 				E0001012 /* InfoPlist.strings in Resources */,
+				E0001025 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -231,6 +249,7 @@
 				E0001021 /* LoginItemHelper.swift in Sources */,
 				E0001022 /* MenuBarManager.swift in Sources */,
 				E0001023 /* MenuBarView.swift in Sources */,
+				E0001024 /* LanguageService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -384,7 +403,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.1.0;
+				MARKETING_VERSION = 3.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bytemeowster.macabolic;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -421,7 +440,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 3.1.0;
+				MARKETING_VERSION = 3.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bytemeowster.macabolic;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

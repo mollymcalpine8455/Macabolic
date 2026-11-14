@@ -142,6 +142,10 @@ enum MediaFileType: String, Codable, CaseIterable, Identifiable {
         !isVideo
     }
     
+    var supportsEmbeddedThumbnail: Bool {
+        self != .webm && self != .wav
+    }
+
     var fileExtension: String {
         rawValue.lowercased()
     }
@@ -245,17 +249,16 @@ enum VideoResolution: String, Codable, CaseIterable, Identifiable {
         }
     }
     
-    var ytdlpValue: String {
+    var maximumHeight: Int? {
         switch self {
-        case .best: return "bestvideo"
-        case .r2160p: return "bestvideo[height<=2160]"
-        case .r1440p: return "bestvideo[height<=1440]"
-        case .r1080p: return "bestvideo[height<=1080]"
-        case .r720p: return "bestvideo[height<=720]"
-        case .r480p: return "bestvideo[height<=480]"
-        case .r360p: return "bestvideo[height<=360]"
-        case .r240p: return "bestvideo[height<=240]"
-        case .worst: return "worstvideo"
+        case .best, .worst: return nil
+        case .r2160p: return 2160
+        case .r1440p: return 1440
+        case .r1080p: return 1080
+        case .r720p: return 720
+        case .r480p: return 480
+        case .r360p: return 360
+        case .r240p: return 240
         }
     }
 }
@@ -283,10 +286,10 @@ enum VideoCodec: String, Codable, CaseIterable, Identifiable {
     var ytdlpFilter: String? {
         switch self {
         case .auto: return nil
-        case .h264: return "[vcodec^=avc1]"
-        case .h265: return "[vcodec~='^(hev1|hvc1)']"
-        case .vp9: return "[vcodec^=vp9]"
-        case .av1: return "[vcodec^=av01]"
+        case .h264: return "[vcodec~='^(avc1|h264)']"
+        case .h265: return "[vcodec~='^(hev1|hvc1|hevc|h265)']"
+        case .vp9: return "[vcodec~='^vp0?9']"
+        case .av1: return "[vcodec~='^av0?1']"
         }
     }
     
@@ -324,7 +327,7 @@ enum AudioCodec: String, Codable, CaseIterable, Identifiable {
     var ytdlpFilter: String? {
         switch self {
         case .auto: return nil
-        case .aac: return "[acodec^=mp4a]"
+        case .aac: return "[acodec~='^(mp4a|aac)']"
         case .opus: return "[acodec^=opus]"
         case .mp3: return "[acodec^=mp3]"
         case .flac: return "[acodec^=flac]"
@@ -494,6 +497,20 @@ struct MediaInfo: Codable {
     let playlist: String?
     let playlistIndex: Int?
     let playlistCount: Int?
+    let resultType: String?
+    let webpageURL: String?
+    let sourceURL: String?
+
+    var isPlaylist: Bool {
+        playlist != nil || resultType == "playlist" || resultType == "multi_video"
+    }
+
+    var downloadURL: String? {
+        [webpageURL, sourceURL].compactMap { $0 }.first {
+            guard let scheme = URL(string: $0)?.scheme?.lowercased() else { return false }
+            return scheme == "https" || scheme == "http"
+        }
+    }
     
     var durationString: String? {
         guard let duration = duration else { return nil }
@@ -528,6 +545,9 @@ struct MediaInfo: Codable {
         case likeCount = "like_count"
         case playlistIndex = "playlist_index"
         case playlistCount = "playlist_count"
+        case resultType = "_type"
+        case webpageURL = "webpage_url"
+        case sourceURL = "url"
     }
 }
 
@@ -541,7 +561,7 @@ struct MediaFormat: Codable {
     let abr: Double?
     let vbr: Double?
     let filesize: Int64?
-    let filesizeApprox: Int64?
+    let filesizeApprox: Double?
     let formatNote: String?
     
     var isVideoOnly: Bool {

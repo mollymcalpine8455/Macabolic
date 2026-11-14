@@ -1,294 +1,265 @@
+import Combine
+import CryptoKit
 import Foundation
-
 
 @MainActor
 class YtdlpService: ObservableObject {
-    @Published var isAvailable: Bool = false
-    @Published var version: String?
-    @Published var isUpdating: Bool = false
-    @Published var updateProgress: Double = 0
-    
+    @Published private(set) var version: String?
+    @Published private(set) var isUpdating = false
+    @Published private(set) var updateError: String?
+
     private var ytdlpPath: URL?
-    private var ffmpegPath: URL?
-    private let localVersion = "1.5.5"
-    private let bundledYtdlpName = "yt-dlp_macos"
-    
-    init() {
-        Task {
-            await setupBinaries()
-        }
-    }
-    
+    private var ffmpegDirectory: URL?
+    private var setupTask: Task<Void, Never>?
+    private var runtimeSetupTask: Task<Void, Error>?
+    private let minimumVersion = "2025.11.12" // First stable release with EJS support
+    private let progressPrefix = "MACABOLIC_PROGRESS:"
+    private let filepathPrefix = "MACABOLIC_FILE:"
 
-    
+    private let appSupport: URL
+
+    init(appSupport: URL? = nil) {
+        self.appSupport = appSupport ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Macabolic")
+    }
+
+    private var searchDirectories: [String] {
+        let inherited = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return ["/opt/homebrew/bin", "/usr/local/bin"]
+            + inherited.split(separator: ":").map(String.init)
+    }
+
+    private var processEnvironment: [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = ([appSupport.path] + searchDirectories + ["/usr/bin", "/bin"]).joined(separator: ":")
+        return environment
+    }
+
     func setupBinaries() async {
-        await findYtdlp()
-        await findFfmpeg()
+        if setupTask == nil {
+            setupTask = Task {
+                await findYtdlp()
+                await findFfmpeg()
+            }
+        }
+        await setupTask?.value
     }
-    
 
-    
+    private func findYtdlp() async {
+        if ytdlpPath != nil { return }
+        let managed = appSupport.appendingPathComponent("yt-dlp")
+        let installed = searchDirectories.map { URL(fileURLWithPath: $0).appendingPathComponent("yt-dlp") }
+        let bundled = Bundle.main.url(forResource: "yt-dlp", withExtension: nil)
+        let candidates = [managed] + installed + [bundled].compactMap { $0 }
 
-    func findYtdlp() async {
-
-        if let bundledPath = Bundle.main.url(forResource: "yt-dlp", withExtension: nil) {
-            ytdlpPath = bundledPath
-            isAvailable = true
+        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate.path) {
+            guard let foundVersion = try? await readVersion(at: candidate),
+                  foundVersion.compare(minimumVersion, options: .numeric) != .orderedAscending else { continue }
+            // An explicit update may have finished while the candidate was being checked.
+            if ytdlpPath == nil {
+                ytdlpPath = candidate
+                version = foundVersion
+            }
             return
         }
-        
 
-        let appSupport = getAppSupportDirectory()
-        let ytdlpInSupport = appSupport.appendingPathComponent("yt-dlp")
-        
-        if FileManager.default.fileExists(atPath: ytdlpInSupport.path) {
-            ytdlpPath = ytdlpInSupport
-            isAvailable = true
-            return
-        }
-        
-
-        await downloadYtdlp()
-    }
-    
-
-    
-
-    func downloadYtdlp() async {
-        isUpdating = true
-        updateProgress = 0
-        
-        let downloadURL = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos")!
-        let appSupport = getAppSupportDirectory()
-        let destination = appSupport.appendingPathComponent("yt-dlp")
-        
-        do {
-            try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-            let (tempURL, _) = try await URLSession.shared.download(from: downloadURL)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.moveItem(at: tempURL, to: destination)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
-            
-            ytdlpPath = destination
-            isAvailable = true
-            await getVersion()
-        } catch {
-            print("yt-dlp indirme hatası: \(error)")
-            isAvailable = false
-        }
-        
-        isUpdating = false
-    }
-
-
-
-    func findFfmpeg() async {
-        let appSupport = getAppSupportDirectory()
-        let ffmpegInSupport = appSupport.appendingPathComponent("ffmpeg")
-        let ffprobeInSupport = appSupport.appendingPathComponent("ffprobe")
-        
-        if FileManager.default.fileExists(atPath: ffmpegInSupport.path) {
-            ffmpegPath = ffmpegInSupport
-        }
-        
-        if !FileManager.default.fileExists(atPath: ffmpegInSupport.path) || 
-           !FileManager.default.fileExists(atPath: ffprobeInSupport.path) {
-            await downloadFfmpeg()
-            await downloadFfprobe()
+        if ytdlpPath == nil {
+            await updateYtdlp()
         }
     }
-
-    func downloadFfmpeg() async {
-        let ffmpegURL = URL(string: "https://evermeet.cx/ffmpeg/get/zip")!
-        let appSupport = getAppSupportDirectory()
-        let destinationZip = appSupport.appendingPathComponent("ffmpeg.zip")
-        let ffmpegDest = appSupport.appendingPathComponent("ffmpeg")
-        
-        do {
-            try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-            let (tempURL, _) = try await URLSession.shared.download(from: ffmpegURL)
-            if FileManager.default.fileExists(atPath: destinationZip.path) {
-                try FileManager.default.removeItem(at: destinationZip)
-            }
-            try FileManager.default.moveItem(at: tempURL, to: destinationZip)
-            
-            let unzipProcess = Process()
-            unzipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-            unzipProcess.arguments = ["-o", destinationZip.path, "-d", appSupport.path]
-            try unzipProcess.run()
-            unzipProcess.waitUntilExit()
-            
-            if FileManager.default.fileExists(atPath: ffmpegDest.path) {
-                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ffmpegDest.path)
-                ffmpegPath = ffmpegDest
-            }
-            try? FileManager.default.removeItem(at: destinationZip)
-        } catch {
-            print("FFmpeg indirme hatası: \(error)")
-        }
-    }
-
-    func downloadFfprobe() async {
-        let ffprobeURL = URL(string: "https://evermeet.cx/ffmpeg/get/ffprobe/zip")!
-        let appSupport = getAppSupportDirectory()
-        let destinationZip = appSupport.appendingPathComponent("ffprobe.zip")
-        let ffprobeDest = appSupport.appendingPathComponent("ffprobe")
-        
-        do {
-            try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-            let (tempURL, _) = try await URLSession.shared.download(from: ffprobeURL)
-            if FileManager.default.fileExists(atPath: destinationZip.path) {
-                try FileManager.default.removeItem(at: destinationZip)
-            }
-            try FileManager.default.moveItem(at: tempURL, to: destinationZip)
-            
-            let unzipProcess = Process()
-            unzipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-            unzipProcess.arguments = ["-o", destinationZip.path, "-d", appSupport.path]
-            try unzipProcess.run()
-            unzipProcess.waitUntilExit()
-            
-            if FileManager.default.fileExists(atPath: ffprobeDest.path) {
-                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ffprobeDest.path)
-            }
-            try? FileManager.default.removeItem(at: destinationZip)
-        } catch {
-            print("FFprobe indirme hatası: \(error)")
-        }
-    }
-    
 
     func updateYtdlp() async {
-        await downloadYtdlp()
-    }
-    
+        guard !isUpdating else { return }
+        isUpdating = true
+        updateError = nil
+        defer { isUpdating = false }
 
-    
-    func getVersion() async {
-        guard let path = ytdlpPath else { return }
-        
+        let source = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos")!
+        let destination = appSupport.appendingPathComponent("yt-dlp")
+        let staging = appSupport.appendingPathComponent(".yt-dlp-" + UUID().uuidString)
+        let files = FileManager.default
+        defer { try? files.removeItem(at: staging) }
+
         do {
-            let output = try await runCommandAsync([path.path, "--version"])
-            version = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            try files.createDirectory(at: appSupport, withIntermediateDirectories: true)
+            let downloaded = try await downloadAsset(from: source)
+            defer { try? files.removeItem(at: downloaded) }
+            try files.moveItem(at: downloaded, to: staging)
+            try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path)
+            let foundVersion = try await readVersion(at: staging)
+            guard foundVersion.compare(minimumVersion, options: .numeric) != .orderedAscending else {
+                throw YtdlpError.commandFailed("yt-dlp \(foundVersion) does not support YouTube EJS.")
+            }
+
+            // Both paths are in the same directory. A failed update leaves the working binary in place.
+            guard rename(staging.path, destination.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            ytdlpPath = destination
+            version = foundVersion
         } catch {
-            print("Versiyon alınamadı: \(error)")
+            updateError = error.localizedDescription
         }
     }
-    
 
-    
+    private func readVersion(at path: URL) async throws -> String {
+        let result = try await runCommand(
+            executable: path, arguments: ["--ignore-config", "--version"]
+        )
+        let version = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard version.range(of: #"^\d{4}\.\d{2}\.\d{2}(?:[.\w+-]+)?$"#, options: .regularExpression) != nil else {
+            throw YtdlpError.commandFailed("Could not read the yt-dlp version.")
+        }
+        return version
+    }
+
+    private func findFfmpeg() async {
+        let files = FileManager.default
+        let directories = searchDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) } + [appSupport]
+        if let installed = directories.first(where: { directory in
+            ["ffmpeg", "ffprobe"].allSatisfy {
+                files.isExecutableFile(atPath: directory.appendingPathComponent($0).path)
+            }
+        }) {
+            ffmpegDirectory = installed
+            return
+        }
+
+        do {
+            try files.createDirectory(at: appSupport, withIntermediateDirectories: true)
+            for name in ["ffmpeg", "ffprobe"] {
+                guard !files.isExecutableFile(atPath: appSupport.appendingPathComponent(name).path) else { continue }
+                let suffix = name == "ffmpeg" ? "zip" : "ffprobe/zip"
+                let source = URL(string: "https://evermeet.cx/ffmpeg/get/" + suffix)!
+                let archive = try await downloadAsset(from: source)
+                defer { try? files.removeItem(at: archive) }
+                _ = try await runCommand(
+                    executable: URL(fileURLWithPath: "/usr/bin/unzip"),
+                    arguments: ["-o", archive.path, name, "-d", appSupport.path]
+                )
+                try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appSupport.appendingPathComponent(name).path)
+            }
+            ffmpegDirectory = appSupport
+        } catch {
+            print("FFmpeg setup failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func prepareYouTubeRuntime(for url: String) async throws {
+        guard let host = URL(string: url)?.host?.lowercased(),
+              host == "youtu.be" || host == "youtube.com" || host.hasSuffix(".youtube.com")
+                || host == "youtube-nocookie.com" || host.hasSuffix(".youtube-nocookie.com") else { return }
+
+        if runtimeSetupTask == nil {
+            runtimeSetupTask = Task {
+                let directories = [appSupport.path] + searchDirectories
+                let runtimes = [("deno", "2.3.0"), ("node", "22.0.0"), ("qjs", "")]
+                for (runtime, minimum) in runtimes {
+                    for directory in directories {
+                        let path = URL(fileURLWithPath: directory).appendingPathComponent(runtime)
+                        guard FileManager.default.isExecutableFile(atPath: path.path) else { continue }
+                        if runtime == "qjs" { return }
+                        if let output = try? await runCommand(executable: path, arguments: ["--version"]),
+                           let range = output.range(of: #"\d+\.\d+\.\d+"#, options: .regularExpression),
+                           output[range].compare(minimum, options: .numeric) != .orderedAscending {
+                            return
+                        }
+                    }
+                }
+                try await installDeno()
+            }
+        }
+
+        do {
+            try await runtimeSetupTask?.value
+        } catch {
+            runtimeSetupTask = nil
+            throw YtdlpError.runtimeSetupFailed(error.localizedDescription)
+        }
+    }
+
+    private func installDeno() async throws {
+        // Checksums from the official Deno v2.9.8 release.
+        #if arch(arm64)
+        let architecture = "aarch64"
+        let checksum = "9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e"
+        #else
+        let architecture = "x86_64"
+        let checksum = "4b2f5edd2639b7470f034238b321d7002d8dfb4726d8558f52c17afac370eb2c"
+        #endif
+        let source = URL(string: "https://github.com/denoland/deno/releases/download/v2.9.8/deno-\(architecture)-apple-darwin.zip")!
+        let archive = try await downloadAsset(from: source)
+        let staging = appSupport.appendingPathComponent(".deno-" + UUID().uuidString, isDirectory: true)
+        let files = FileManager.default
+        defer {
+            try? files.removeItem(at: archive)
+            try? files.removeItem(at: staging)
+        }
+        let digest = SHA256.hash(data: try Data(contentsOf: archive, options: .mappedIfSafe))
+            .map { String(format: "%02x", $0) }.joined()
+        guard digest == checksum else {
+            throw YtdlpError.commandFailed("The Deno archive failed its SHA-256 check.")
+        }
+        try files.createDirectory(at: staging, withIntermediateDirectories: true)
+        _ = try await runCommand(executable: URL(fileURLWithPath: "/usr/bin/unzip"),
+                                 arguments: ["-o", archive.path, "deno", "-d", staging.path])
+        let extracted = staging.appendingPathComponent("deno")
+        try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: extracted.path)
+        _ = try await runCommand(executable: extracted, arguments: ["--version"])
+        guard rename(extracted.path, appSupport.appendingPathComponent("deno").path) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+    }
+
+    private func downloadAsset(from url: URL) async throws -> URL {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        let (file, response) = try await URLSession.shared.download(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            try? FileManager.default.removeItem(at: file)
+            throw YtdlpError.commandFailed("Download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)).")
+        }
+        return file
+    }
 
     func fetchInfo(url: String) async throws -> MediaInfo {
-        guard let path = ytdlpPath else {
-            throw YtdlpError.notFound
-        }
-        
-        do {
-             return try await fetchSingleVideoInfo(path: path.path, url: url)
-        } catch {
-            if url.contains("list=") || url.contains("/playlist") {
-                 return try await fetchPlaylistSummaryInfo(path: path.path, url: url)
-            }
-            throw error // Playlist değilse orijinal hatayı fırlat
-        }
+        let output = try await fetchMetadata(url: url, args: ["--dump-single-json", "--no-playlist"])
+        return try JSONDecoder().decode(MediaInfo.self, from: Data(output.utf8))
     }
-    
-    private func fetchSingleVideoInfo(path: String, url: String) async throws -> MediaInfo {
-        var args = [
-            path,
-            "--dump-json",
-            "--no-playlist",
-            "--no-warnings"
-        ]
-        
-        appendCookieArgs(to: &args)
-
-        
-        args.append(url)
-        
-        let output = try await runCommand(args)
-        guard let data = output.data(using: .utf8) else { throw YtdlpError.parseError }
-        return try JSONDecoder().decode(MediaInfo.self, from: data)
-    }
-
-    private func fetchPlaylistSummaryInfo(path: String, url: String) async throws -> MediaInfo {
-        var args = [
-            path,
-            "--dump-single-json",
-            "--flat-playlist",
-            "--no-warnings"
-        ]
-        
-        appendCookieArgs(to: &args)
-
-        
-        args.append(url)
-        
-        let output = try await runCommand(args)
-        guard let data = output.data(using: .utf8) else { throw YtdlpError.parseError }
-        
-        let decoder = JSONDecoder()
-        
-        var info = try decoder.decode(MediaInfo.self, from: data)
-        
-        
-        return MediaInfo(
-            id: info.id,
-            title: info.title,
-            description: info.description,
-            thumbnail: info.thumbnail, // Bazen playlist thumbnail gelir
-            duration: nil,
-            uploader: info.uploader,
-            uploadDate: nil,
-            viewCount: info.viewCount,
-            likeCount: nil,
-            formats: nil,
-            subtitles: nil,
-            automaticCaptions: nil,
-            chapters: nil,
-            playlist: info.id, // Playlist olduğunu belirtmek için ID'yi buraya da koyuyoruz
-            playlistIndex: nil,
-            playlistCount: info.playlistCount ?? info.viewCount // Bazen viewCount yerine entry count gelebilir
-        )
-    }
-    
 
     func fetchPlaylistInfo(url: String) async throws -> [MediaInfo] {
-        guard let path = ytdlpPath else {
-            throw YtdlpError.notFound
-        }
-        
-        var args = [
-            path.path,
-            "--dump-json",
-            "--flat-playlist",
-            "--no-warnings"
-        ]
-        
-        appendCookieArgs(to: &args)
-
-        
-        args.append(url)
-        
-        let output = try await runCommand(args)
-        
-        var results: [MediaInfo] = []
+        let output = try await fetchMetadata(url: url, args: ["--dump-json", "--yes-playlist"])
         let decoder = JSONDecoder()
-        
-        for line in output.components(separatedBy: "\n") where !line.isEmpty {
-            if let data = line.data(using: .utf8),
-               let info = try? decoder.decode(MediaInfo.self, from: data) {
-                results.append(info)
-            }
-        }
-        
-        return results
+        let entries = output.split(separator: "\n").compactMap { line in
+            try? decoder.decode(MediaInfo.self, from: Data(line.utf8))
+        }.filter { $0.downloadURL != nil }
+        guard !entries.isEmpty else { throw YtdlpError.noPlaylistEntries }
+        return entries
     }
-    
 
-    
+    private func fetchMetadata(url: String, args: [String]) async throws -> String {
+        await setupBinaries()
+        guard let path = ytdlpPath else { throw YtdlpError.notFound(updateError) }
+        try await prepareYouTubeRuntime(for: url)
+        return try await runCommand(
+            executable: path,
+            arguments: commonArguments() + ["--simulate", "--flat-playlist", "--ignore-no-formats-error"]
+                + args + ["--", url]
+        )
+    }
+
+    private func commonArguments() -> [String] {
+        var args = ["--ignore-config", "--color", "never", "--js-runtimes", "node", "--js-runtimes", "quickjs"]
+        if let ffmpegDirectory = ffmpegDirectory {
+            args += ["--ffmpeg-location", ffmpegDirectory.path]
+        }
+        let browser = UserDefaults.standard.string(forKey: "browserForCookies") ?? "none"
+        if browser != "none" {
+            args += ["--cookies-from-browser", browser]
+        }
+        return args
+    }
 
     func download(
         url: String,
@@ -297,386 +268,214 @@ class YtdlpService: ObservableObject {
         onProgress: @escaping (Double, String?, String?) -> Void,
         onOutput: @escaping (String) -> Void
     ) async throws -> URL {
-        guard let path = ytdlpPath else {
-            throw YtdlpError.notFound
-        }
-        
-        var args = [path.path]
-        args.append("--no-playlist")
-        
-        let appSupport = getAppSupportDirectory()
-        args.append(contentsOf: ["--ffmpeg-location", appSupport.path])
-        args.append(contentsOf: ["--paths", "temp:/tmp"])
-        
-        let outputTemplate: String
-        if let customFilename = options.customFilename, !customFilename.isEmpty {
-            outputTemplate = options.saveFolder.appendingPathComponent("\(customFilename).%(ext)s").path
-        } else {
-            outputTemplate = options.saveFolder.appendingPathComponent("%(title)s.%(ext)s").path
-        }
-        args.append(contentsOf: ["-o", outputTemplate])
-        
+        await setupBinaries()
+        guard let path = ytdlpPath else { throw YtdlpError.notFound(updateError) }
+        try await prepareYouTubeRuntime(for: url)
 
-        args.append(contentsOf: buildFormatArgs(options: options))
-        
+        var args = commonArguments() + ["--no-playlist"]
+        let outputTemplate: String
+        if let filename = options.customFilename, !filename.isEmpty {
+            let escaped = filename.replacingOccurrences(of: "%", with: "%%")
+                .replacingOccurrences(of: "/", with: "／")
+                .replacingOccurrences(of: ":", with: "：")
+            outputTemplate = "\(escaped).%(ext)s"
+        } else {
+            outputTemplate = "%(title)s.%(ext)s"
+        }
+        args += ["-o", outputTemplate] + buildFormatArgs(options: options)
 
         if options.downloadSubtitles && !options.subtitleLanguages.isEmpty {
-            let subFormat = options.subtitleFormat?.ytdlpValue ?? "srt"
-            args.append(contentsOf: ["--sub-format", "\(subFormat)/best"])
-            let langList = options.subtitleLanguages.joined(separator: ",")
-            args.append(contentsOf: ["--sub-langs", langList])
-            
-            args.append("--write-subs")
-            args.append("--write-auto-subs")
-            
+            var subFormat = options.subtitleFormat?.ytdlpValue ?? "srt"
+            if options.embedSubtitles && options.fileType == .webm {
+                subFormat = "vtt"
+            }
+            let languages = options.subtitleLanguages.sorted()
+                .map { "^" + NSRegularExpression.escapedPattern(for: $0) + "$" }
+                .joined(separator: ",")
+            args += ["--sub-format", "\(subFormat)/best", "--sub-langs", languages,
+                     "--write-subs", "--write-auto-subs", "--convert-subs", subFormat]
             if options.embedSubtitles && options.fileType.isVideo {
-                args.append("--embed-subs")
-                args.append(contentsOf: ["--convert-subs", subFormat])
+                args += ["--embed-subs", "--compat-options", "no-keep-subs"]
             }
         }
-        
 
-        if options.downloadThumbnail {
-            args.append("--write-thumbnail")
-        }
-        if options.embedThumbnail {
+        if options.downloadThumbnail { args.append("--write-thumbnail") }
+        if options.embedThumbnail && options.fileType.supportsEmbeddedThumbnail {
             args.append("--embed-thumbnail")
         }
-        
 
-        // Neonapple feedback: Always embed metadata and chapters
-        args.append("--embed-metadata")
+        // Metadata also controls chapter embedding by default, so pass the chapter toggle explicitly.
+        if options.embedMetadata { args.append("--embed-metadata") }
         args.append("--embed-chapters")
-        
-        if options.splitChapters {
-            args.append("--split-chapters")
-        }
-        
-
-        if options.sponsorBlock {
-            args.append(contentsOf: ["--sponsorblock-remove", "all"])
-        }
-        
-
+        if options.splitChapters { args.append("--split-chapters") }
+        if options.sponsorBlock { args += ["--sponsorblock-remove", "all"] }
         if let start = options.timeFrameStart, let end = options.timeFrameEnd {
-            args.append(contentsOf: ["--download-sections", "*\(start)-\(end)"])
+            args += ["--download-sections", "*\(start)-\(end)"]
         }
-        
-        if options.forceOverwrite == true {
-            args.append("--force-overwrites")
-        }
-        
-        if let additionalArgs = options.additionalArguments, !additionalArgs.isEmpty {
-            // Robust parsing of additional arguments that respects quotes
-            let customArgs = splitArguments(additionalArgs)
-            args.append(contentsOf: customArgs)
+        if options.forceOverwrite == true { args.append("--force-overwrites") }
+        if let additional = options.additionalArguments, !additional.isEmpty {
+            args += splitArguments(additional)
         }
 
+        args += ["--no-quiet", "--progress", "--newline",
+                 "--progress-template", "download:\(progressPrefix)%(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s",
+                 "--print", "after_move:\(filepathPrefix)%(filepath)j", "--", url]
 
-        
-        appendCookieArgs(to: &args)
+        let command = ([path.path] + args).map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " ")
+        onOutput("[COMMAND] \(command)")
 
-        
-
-        args.append("--newline")
-        args.append("--progress-template")
-        args.append("%(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s")
-        
-        args.append(url)
-        
-        // Neonapple feedback: Log the full command for debugging
-        let fullCommand = args.map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " ")
-        onOutput("[COMMAND] \(fullCommand)\n")
-        
-        let outputPath = try await runDownloadProcess(
-            args: args,
-            saveFolder: options.saveFolder,
+        let result = try await runProcess(executable: path, arguments: args, directory: options.saveFolder,
             onProcessCreated: onProcessCreated,
-            onProgress: onProgress,
-            onOutput: onOutput
-        )
-        
-        if options.embedSubtitles && options.downloadSubtitles {
-            cleanupSubtitleFiles(for: outputPath, in: options.saveFolder)
-        }
-        
-        return URL(fileURLWithPath: outputPath, relativeTo: options.saveFolder).absoluteURL
-    }
-    
-    private func cleanupSubtitleFiles(for videoPath: String, in folder: URL) {
-        let fileManager = FileManager.default
-        let videoURL = URL(fileURLWithPath: videoPath)
-        let videoNameWithoutExt = videoURL.deletingPathExtension().lastPathComponent
-        
-        let subtitleExtensions = ["srt", "vtt", "ass", "sub", "ssa"]
-        
-        do {
-            let contents = try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-            for file in contents {
-                let fileName = file.deletingPathExtension().lastPathComponent
-                let fileExt = file.pathExtension.lowercased()
-                
-                if subtitleExtensions.contains(fileExt) && fileName.hasPrefix(videoNameWithoutExt) {
-                    try? fileManager.removeItem(at: file)
+            onLine: { [progressPrefix, filepathPrefix] line in
+                if line.hasPrefix(filepathPrefix) { return }
+                onOutput(line)
+                guard line.hasPrefix(progressPrefix) else { return }
+                let parts = line.dropFirst(progressPrefix.count).split(whereSeparator: \.isWhitespace)
+                if let first = parts.first,
+                   let percent = Double(first.replacingOccurrences(of: "%", with: "")), percent.isFinite {
+                    let speed = parts.count > 1 ? String(parts[1]) : nil
+                    let eta = parts.count > 2 ? String(parts[2]) : nil
+                    onProgress(min(max(percent / 100, 0), 1), speed, eta)
                 }
-            }
-        } catch {
-            print("Error cleaning up subtitle files: \(error)")
-        }
-    }
-    
+            })
 
-    
+        guard result.status == 0 else {
+            let error = result.error
+            if error.contains("HTTP Error 429") || error.contains("Too Many Requests") {
+                throw YtdlpError.tooManyRequests
+            }
+            let lastError = error.split(separator: "\n").last(where: { $0.hasPrefix("ERROR:") })
+            if let lastError = lastError, ["subtitle", "caption"].contains(where: lastError.localizedCaseInsensitiveContains) {
+                throw YtdlpError.subtitleError(error)
+            }
+            throw YtdlpError.downloadFailed(error.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        let paths = result.output.split(separator: "\n").compactMap { line -> String? in
+            guard line.hasPrefix(filepathPrefix) else { return nil }
+            return try? JSONDecoder().decode(String.self, from: Data(line.dropFirst(filepathPrefix.count).utf8))
+        }
+        if let path = paths.last, !path.isEmpty {
+            let file = URL(fileURLWithPath: path, relativeTo: options.saveFolder).absoluteURL
+            if FileManager.default.fileExists(atPath: file.path) { return file }
+        }
+        throw YtdlpError.noSavedFile
+    }
+
     private func buildFormatArgs(options: DownloadOptions) -> [String] {
-        var args: [String] = []
-        
-        if options.fileType.isVideo {
-            var videoBase = ""
-            if let resolution = options.videoResolution {
-                videoBase = resolution.ytdlpValue
-            } else {
-                videoBase = "bestvideo"
-            }
-            
-            var formatStr = ""
-            
-            // Build video codec filter
-            let videoCodecFilter = options.videoCodec?.ytdlpFilter ?? ""
-            let audioCodecFilter = options.audioCodec?.ytdlpFilter ?? ""
-            
-            if !videoCodecFilter.isEmpty || !audioCodecFilter.isEmpty {
-                // User selected specific codec(s)
-                let audioBase = audioCodecFilter.isEmpty ? "bestaudio" : "bestaudio\(audioCodecFilter)"
-                
-                if !videoCodecFilter.isEmpty {
-                    formatStr = "\(videoBase)\(videoCodecFilter)+\(audioBase)"
-                    formatStr += "/\(videoBase)+\(audioBase)"
-                    formatStr += "/\(videoBase)+bestaudio"
-                } else {
-                    formatStr = "\(videoBase)+\(audioBase)"
-                    formatStr += "/\(videoBase)+bestaudio"
+        let audioCodec = options.audioCodec?.ytdlpFilter ?? ""
+        let target = options.fileType.fileExtension
+
+        guard options.fileType.isVideo else {
+            let selector = audioCodec.isEmpty ? "ba/b" : "ba\(audioCodec)/b\(audioCodec)/ba/b"
+            return ["-f", selector, "-x", "--audio-format", target,
+                    "--audio-quality", options.audioQuality?.ytdlpValue ?? "0"]
+        }
+
+        let videoCodec = options.videoCodec?.ytdlpFilter ?? ""
+        let resolution = options.videoResolution
+        let height = resolution?.maximumHeight.map { "[height<=\($0)]" } ?? ""
+        let video = resolution == .worst ? "wv" : "bv"
+        let combined = resolution == .worst ? "w" : "b"
+        let webmVideo = options.fileType == .webm ? "[vcodec~='^(vp0?[89]|av0?1)']" : ""
+        let webmAudio = options.fileType == .webm ? "[acodec~='^(opus|vorbis|vrbs)']" : ""
+
+        var selectors: [String] = []
+        func addFormats(height: String, videoCompatibility: String, audioCompatibility: String) {
+            let preferences = [(videoCodec, audioCodec), (videoCodec, ""), ("", audioCodec), ("", "")]
+            for (v, a) in preferences {
+                let videoFilters = height + videoCompatibility + v
+                let audioFilters = audioCompatibility + a
+                for selector in ["\(video)\(videoFilters)+ba\(audioFilters)",
+                                 "\(combined)\(videoFilters)\(audioFilters)"] where !selectors.contains(selector) {
+                    selectors.append(selector)
                 }
-            } else {
-                formatStr = "\(videoBase)+bestaudio"
-            }
-            
-            formatStr += "/best"
-            
-            args.append(contentsOf: ["-f", formatStr])
-            args.append(contentsOf: ["--merge-output-format", options.fileType.fileExtension])
-        } else {
-            // Audio-only download
-            var audioFormat = "ba"
-            
-            if let audioCodec = options.audioCodec, let filter = audioCodec.ytdlpFilter {
-                audioFormat = "ba\(filter)/ba"  // Preferred codec with fallback
-            }
-            
-            args.append(contentsOf: ["-f", "\(audioFormat)/best"])
-            args.append(contentsOf: ["-x", "--audio-format", options.fileType.fileExtension])
-            
-            if let quality = options.audioQuality {
-                args.append(contentsOf: ["--audio-quality", quality.ytdlpValue])
-            } else {
-                args.append(contentsOf: ["--audio-quality", "0"]) // Best quality by default
             }
         }
-        
+
+        addFormats(height: height, videoCompatibility: webmVideo, audioCompatibility: webmAudio)
+        addFormats(height: height, videoCompatibility: "", audioCompatibility: "")
+        if !height.isEmpty {
+            addFormats(height: "", videoCompatibility: webmVideo, audioCompatibility: webmAudio)
+            addFormats(height: "", videoCompatibility: "", audioCompatibility: "")
+        }
+        let merge = options.fileType == .mkv ? "mkv" : "\(target)/mkv"
+        let conversion = options.fileType == .mkv ? "--remux-video" : "--recode-video"
+        var args = ["-f", selectors.joined(separator: "/"), "--merge-output-format", merge, conversion, target]
+        if let height = resolution?.maximumHeight {
+            args += ["-S", "height:\(height)"]
+        }
         return args
     }
-    
-    private func appendCookieArgs(to args: inout [String]) {
-        let browser = UserDefaults.standard.string(forKey: "browserForCookies") ?? "none"
-        if browser != "none" {
-            args.append(contentsOf: ["--cookies-from-browser", browser])
+
+    private func runCommand(executable: URL, arguments: [String]) async throws -> String {
+        let result = try await runProcess(executable: executable, arguments: arguments)
+        guard result.status == 0 else {
+            throw YtdlpError.commandFailed(result.error.isEmpty ? result.output : result.error)
         }
+        return result.output
     }
 
-    
+    private func runProcess(
+        executable: URL,
+        arguments: [String],
+        directory: URL? = nil,
+        onProcessCreated: ((Process) -> Void)? = nil,
+        onLine: (@MainActor (String) -> Void)? = nil
+    ) async throws -> (status: Int32, output: String, error: String) {
+        let process = Process()
+        let output = Pipe()
+        let error = Pipe()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.currentDirectoryURL = directory
+        process.standardOutput = output
+        process.standardError = error
+        process.environment = processEnvironment
 
-    private func runCommandAsync(_ args: [String]) async throws -> String {
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let pipe = Pipe()
-            
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = args
-            process.standardOutput = pipe
-            process.standardError = pipe
-            
-            var env = ProcessInfo.processInfo.environment
-            let appSupport = getAppSupportDirectory()
-            let currentPath = env["PATH"] ?? ""
-            env["PATH"] = "\(appSupport.path):\(currentPath)"
-            process.environment = env
-            
+        try process.run()
+        onProcessCreated?(process)
 
-            var outputData = Data()
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if !data.isEmpty {
-                    outputData.append(data)
-                }
-            }
-            
-            process.terminationHandler = { proc in
-
-                pipe.fileHandleForReading.readabilityHandler = nil
-                
-
-                let remainingData = pipe.fileHandleForReading.readDataToEndOfFile()
-                if !remainingData.isEmpty {
-                    outputData.append(remainingData)
-                }
-                
-                let output = String(data: outputData, encoding: .utf8) ?? ""
-                
-                if proc.terminationStatus == 0 {
-                    continuation.resume(returning: output)
-                } else {
-                    continuation.resume(throwing: YtdlpError.commandFailed(output))
-                }
-            }
-            
-            do {
-                try process.run()
-            } catch {
-                pipe.fileHandleForReading.readabilityHandler = nil
-                continuation.resume(throwing: error)
+        async let stdout = Self.readPipe(output.fileHandleForReading, onLine: onLine)
+        async let stderr = Self.readPipe(error.fileHandleForReading, onLine: onLine)
+        let (outputText, errorText) = try await (stdout, stderr)
+        let status = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                process.waitUntilExit()
+                continuation.resume(returning: process.terminationStatus)
             }
         }
+        return (status, outputText, errorText)
     }
-    
-    private func runCommand(_ args: [String]) async throws -> String {
-        return try await runCommandAsync(args)
-    }
-    
-    private func runDownloadProcess(
-        args: [String],
-        saveFolder: URL,
-        onProcessCreated: @escaping (Process) -> Void,
-        onProgress: @escaping (Double, String?, String?) -> Void,
-        onOutput: @escaping (String) -> Void
+
+    nonisolated private static func readPipe(
+        _ handle: FileHandle, onLine: (@MainActor (String) -> Void)?
     ) async throws -> String {
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = args
-            process.currentDirectoryURL = saveFolder
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            
-            var env = ProcessInfo.processInfo.environment
-            let appSupport = getAppSupportDirectory()
-            let currentPath = env["PATH"] ?? ""
-            env["PATH"] = "\(appSupport.path):\(currentPath)"
-            process.environment = env
-            
-            onProcessCreated(process)
-            
-            let synchronizationQueue = DispatchQueue(label: "com.macabolic.download.sync")
-            var outputPath = ""
-            var errorOutput = ""
-            
-            outputPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
-                
-                synchronizationQueue.async {
-                    if line.contains("[download] Destination:") {
-                        let parts = line.components(separatedBy: "[download] Destination: ")
-                        if parts.count > 1 {
-                            outputPath = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                do {
+                    var data = Data()
+                    var pending = Data()
+                    while let chunk = try handle.read(upToCount: 4096), !chunk.isEmpty {
+                        data.append(chunk)
+                        guard let onLine = onLine else { continue }
+                        pending.append(chunk)
+                        while let newline = pending.firstIndex(of: 0x0A) {
+                            let line = String(decoding: pending.prefix(upTo: newline), as: UTF8.self)
+                            pending.removeSubrange(...newline)
+                            DispatchQueue.main.async { onLine(line) }
                         }
                     }
-                    
-                    if line.contains("has already been downloaded") {
-                        let parts = line.components(separatedBy: "[download] ")
-                        if parts.count > 1 {
-                            let pathPart = parts[1].components(separatedBy: " has already been downloaded")
-                            if !pathPart.isEmpty {
-                                outputPath = pathPart[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                            }
-                        }
+                    if let onLine = onLine, !pending.isEmpty {
+                        let line = String(decoding: pending, as: UTF8.self)
+                        DispatchQueue.main.async { onLine(line) }
                     }
-                    
-                    if line.contains("[Merger] Merging formats into") {
-                        let parts = line.components(separatedBy: "\"")
-                        if parts.count > 1 {
-                            outputPath = parts[1]
-                        }
-                    }
+                    continuation.resume(returning: String(decoding: data, as: UTF8.self))
+                } catch {
+                    continuation.resume(throwing: error)
                 }
-                
-                DispatchQueue.main.async {
-                    onOutput(line)
-                    
-                    if line.contains("%") {
-                        let components = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                            .components(separatedBy: .whitespaces)
-                            .filter { !$0.isEmpty }
-                        
-                        if let percentStr = components.first,
-                           let percent = Double(percentStr.replacingOccurrences(of: "%", with: "")) {
-                            let speed = components.count > 1 ? components[1] : nil
-                            let eta = components.count > 2 ? components[2] : nil
-                            onProgress(percent / 100.0, speed, eta)
-                        }
-                    }
-                }
-            }
-            
-            errorPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
-                
-                synchronizationQueue.async {
-                    errorOutput += line
-                }
-                
-                DispatchQueue.main.async {
-                    onOutput("[ERROR] \(line)")
-                }
-            }
-            
-            process.terminationHandler = { proc in
-                outputPipe.fileHandleForReading.readabilityHandler = nil
-                errorPipe.fileHandleForReading.readabilityHandler = nil
-                
-                synchronizationQueue.async {
-                    if proc.terminationStatus == 0 {
-                        continuation.resume(returning: outputPath)
-                    } else {
-                        if errorOutput.contains("429") || errorOutput.contains("Too Many Requests") {
-                            continuation.resume(throwing: YtdlpError.tooManyRequests)
-                        } else if errorOutput.contains("subtitle") || errorOutput.contains("caption") {
-                            continuation.resume(throwing: YtdlpError.subtitleError(errorOutput))
-                        } else {
-                            let cleanError = errorOutput.components(separatedBy: "\n")
-                                .filter { $0.contains("ERROR:") }
-                                .last?
-                                .replacingOccurrences(of: "ERROR: ", with: "")
-                                ?? errorOutput
-                            continuation.resume(throwing: YtdlpError.downloadFailed(cleanError))
-                        }
-                    }
-                }
-            }
-            
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
             }
         }
-    }
-    
-    private func getAppSupportDirectory() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("Macabolic")
     }
 
     private func splitArguments(_ input: String) -> [String] {
@@ -717,22 +516,20 @@ class YtdlpService: ObservableObject {
     }
 }
 
-
-
 enum YtdlpError: LocalizedError {
-    case notFound
-    case parseError
+    case notFound(String?)
     case commandFailed(String)
     case downloadFailed(String)
     case tooManyRequests
     case subtitleError(String)
+    case noSavedFile
+    case noPlaylistEntries
+    case runtimeSetupFailed(String)
     
     var errorDescription: String? {
         switch self {
-        case .notFound:
-            return "yt-dlp not found"
-        case .parseError:
-            return "Failed to parse data"
+        case .notFound(let reason):
+            return reason.map { "yt-dlp setup failed: \($0)" } ?? "yt-dlp not found. Open Settings → Advanced to update it."
         case .commandFailed(let output):
             return "Command failed: \(output)"
         case .downloadFailed(let output):
@@ -741,6 +538,12 @@ enum YtdlpError: LocalizedError {
             return "429: Too Many Requests"
         case .subtitleError(let output):
             return "Subtitle error: \(output)"
+        case .noSavedFile:
+            return "yt-dlp did not report a saved media file."
+        case .noPlaylistEntries:
+            return "No downloadable playlist entries."
+        case .runtimeSetupFailed(let reason):
+            return "Could not set up JavaScript for YouTube. Install Deno or retry. \(reason)"
         }
     }
 }
